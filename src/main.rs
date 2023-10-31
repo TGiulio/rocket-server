@@ -12,8 +12,12 @@ fn hello() -> &'static str {
 #[launch]
 fn rocket() -> _ {
     rocket::build()
+        // route defined above
         .mount("/", routes![hello])
+        // route used to serve static files
         .mount("/index", FileServer::from(relative!("static")))
+        .mount("/style", FileServer::from(relative!("static/css")))
+        .mount("/js", FileServer::from(relative!("static/js")))
 }
 
 #[cfg(test)]
