@@ -9,8 +9,7 @@ To explore the different frameworks I decided to create applications with the co
 
 - GET routes which serves static files
 - POST routes which receive JSON and/or csv and uses extractors
-- a non mutable shared state for single application
-- a mutable shared state for all applications
+- a mutable shared state
 - request guards
 - reading/writing from/to MongoDB
 
