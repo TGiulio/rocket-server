@@ -2,9 +2,17 @@
 extern crate rocket;
 
 use rocket::fs::{relative, FileServer};
+use rocket::State;
+
 use rocket::serde::json::Json;
 use rocket::serde::Deserialize;
 use std::str;
+use std::sync::Mutex;
+
+#[derive(Deserialize)]
+struct User {
+    username: Mutex<String>,
+}
 
 #[derive(Deserialize)]
 struct Factors {
@@ -26,10 +34,24 @@ fn divide(factors: Json<Factors>) -> String {
     }
 }
 
+#[post("/username", format = "json", data = "<user>")]
+fn set_username(user: Json<User>, user_state: &State<User>) {
+    let mut username_state_guard = user_state.username.lock().unwrap();
+    *username_state_guard = user.username.lock().unwrap().clone();
+}
+
+#[get("/username")]
+fn get_username(user_state: &State<User>) -> String {
+    user_state.username.lock().unwrap().to_string()
+}
+
 //this is run as main
 #[launch]
 fn rocket() -> _ {
     rocket::build()
+        .manage(User {
+            username: Mutex::new("".to_string()),
+        })
         // routes defined above: get
         .mount("/", routes![hello])
         // post
@@ -38,6 +60,10 @@ fn rocket() -> _ {
         .mount("/index", FileServer::from(relative!("static")))
         .mount("/style", FileServer::from(relative!("static/css")))
         .mount("/js", FileServer::from(relative!("static/js")))
+        // route to set state
+        .mount("/", routes![set_username])
+        // route to get state
+        .mount("/", routes![get_username])
 }
 
 #[cfg(test)]
@@ -45,6 +71,7 @@ mod test {
     use super::rocket;
     use rocket::http::{ContentType, Status};
     use rocket::local::blocking::Client;
+    use rocket::serde::json;
 
     #[test]
     fn hello_test() {
@@ -74,5 +101,34 @@ mod test {
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::Text);
         assert_eq!(response.into_string().unwrap(), "2");
+    }
+
+    #[test]
+    fn username_test() {
+        fn set_and_read(user_name: &str) {
+            let client = Client::tracked(rocket()).expect("valid rocket instance");
+
+            let get_response = client.get(uri!("/username")).dispatch();
+            assert_eq!(get_response.status(), Status::Ok);
+            assert_eq!(get_response.content_type().unwrap(), ContentType::Text);
+            assert_eq!(get_response.into_string().unwrap(), "");
+
+            let set_response = client
+                .post(uri!("/username"))
+                .header(ContentType::JSON)
+                .body(json::to_string(&json::json!({"username": user_name})).unwrap())
+                .dispatch();
+            assert_eq!(set_response.status(), Status::Ok);
+
+            let get_response = client.get(uri!("/username")).dispatch();
+            assert_eq!(get_response.status(), Status::Ok);
+            assert_eq!(get_response.content_type().unwrap(), ContentType::Text);
+            assert_eq!(get_response.into_string().unwrap(), user_name);
+        }
+
+        set_and_read("Sirio");
+        set_and_read("Andromeda");
+        set_and_read("Altair");
+        set_and_read("Polluce");
     }
 }
