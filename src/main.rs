@@ -9,6 +9,7 @@ use rocket::serde::Deserialize;
 use rocket::State;
 
 use std::path::Path;
+use std::process::Command;
 use std::str;
 use std::sync::Mutex;
 struct PhotoKey<'r>(&'r str);
@@ -84,6 +85,24 @@ async fn get_photo(_photo_key: PhotoKey<'_>) -> Option<NamedFile> {
         .ok()
 }
 
+#[get("/script?<a>&<b>")]
+fn script(a: &str, b: &str) -> String {
+    // Command::new("python3").args([a, b]).output()
+    let res: String;
+    match Command::new("python3")
+        .args(["./static/py/sum.py", a, b])
+        .output()
+    {
+        Ok(out) => {
+            res = match str::from_utf8(&out.stdout) {
+                Ok(text) => text.trim().to_string(),
+                Err(e) => return format!("couldn't read the script output: {}", e).to_string(),
+            }
+        }
+        Err(e) => return format!("the script couldn't be executed: {}", e).to_string(),
+    }
+    return res;
+}
 //this is run as main
 #[launch]
 fn rocket() -> _ {
@@ -105,6 +124,8 @@ fn rocket() -> _ {
         .mount("/", routes![get_username])
         // route that uses custom guard
         .mount("/", routes![get_photo])
+        // route that execute an external script
+        .mount("/", routes![script])
 }
 
 #[cfg(test)]
@@ -191,5 +212,23 @@ mod test {
 
         let response = client.get(uri!("/photo")).dispatch();
         assert_eq!(response.status(), Status::BadRequest);
+    }
+
+    #[test]
+    fn script_test() {
+        let client = Client::tracked(rocket()).expect("valid rocket instance");
+        let response = client.get(uri!("/script?a=9182.467&b=3057")).dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type().unwrap(), ContentType::Text);
+        assert_eq!(response.into_string().unwrap(), "12239.467");
+
+        let client = Client::tracked(rocket()).expect("valid rocket instance");
+        let response = client.get(uri!("/script?a=9182.467")).dispatch();
+        assert_eq!(response.status(), Status::UnprocessableEntity);
+
+        let client = Client::tracked(rocket()).expect("valid rocket instance");
+        let response = client.get(uri!("/script?a=9182.467&b=vega")).dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type().unwrap(), ContentType::Text);
     }
 }
