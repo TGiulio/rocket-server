@@ -1,13 +1,14 @@
 #[macro_use]
 extern crate rocket;
 
-use rocket::fs::{relative, FileServer};
+use rocket::fs::{relative, FileServer, NamedFile};
 use rocket::http::Status;
-use rocket::request::{self, FromRequest, Outcome, Request};
+use rocket::request::{FromRequest, Outcome, Request};
 use rocket::serde::json::Json;
 use rocket::serde::Deserialize;
 use rocket::State;
 
+use std::path::Path;
 use std::str;
 use std::sync::Mutex;
 struct PhotoKey<'r>(&'r str);
@@ -76,6 +77,13 @@ fn get_username(user_state: &State<User>) -> String {
     user_state.username.lock().unwrap().to_string()
 }
 
+#[get("/photo")]
+async fn get_photo(_photo_key: PhotoKey<'_>) -> Option<NamedFile> {
+    NamedFile::open(Path::new("static/img/nice_photo.JPG"))
+        .await
+        .ok()
+}
+
 //this is run as main
 #[launch]
 fn rocket() -> _ {
@@ -95,6 +103,8 @@ fn rocket() -> _ {
         .mount("/", routes![set_username])
         // route to get state
         .mount("/", routes![get_username])
+        // route that uses custom guard
+        .mount("/", routes![get_photo])
 }
 
 #[cfg(test)]
