@@ -2,12 +2,15 @@
 extern crate rocket;
 
 use rocket::fs::{relative, FileServer};
-use rocket::State;
-
+use rocket::http::Status;
+use rocket::request::{self, FromRequest, Outcome, Request};
 use rocket::serde::json::Json;
 use rocket::serde::Deserialize;
+use rocket::State;
+
 use std::str;
 use std::sync::Mutex;
+struct PhotoKey<'r>(&'r str);
 
 #[derive(Deserialize)]
 struct User {
@@ -18,6 +21,34 @@ struct User {
 struct Factors {
     dividend: f32,
     divisor: f32,
+}
+
+#[derive(Debug)]
+enum PhotoKeyError {
+    Negative,
+    Missing,
+}
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for PhotoKey<'r> {
+    type Error = PhotoKeyError;
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        fn is_valid(key: &str) -> bool {
+            key == "yes"
+        }
+
+        match req.headers().get_one("nice-photo") {
+            None => Outcome::Error((Status::BadRequest, PhotoKeyError::Missing)),
+            Some(key) => {
+                if is_valid(key) {
+                    Outcome::Success(PhotoKey(key))
+                } else {
+                    Outcome::Error((Status::Forbidden, PhotoKeyError::Negative))
+                }
+            }
+        }
+    }
 }
 
 #[get("/")]
@@ -69,7 +100,7 @@ fn rocket() -> _ {
 #[cfg(test)]
 mod test {
     use super::rocket;
-    use rocket::http::{ContentType, Status};
+    use rocket::http::{ContentType, Header, Status};
     use rocket::local::blocking::Client;
     use rocket::serde::json;
 
@@ -130,5 +161,25 @@ mod test {
         set_and_read("Andromeda");
         set_and_read("Altair");
         set_and_read("Polluce");
+    }
+
+    #[test]
+    fn req_guards_test() {
+        let client = Client::tracked(rocket()).expect("valid rocket instance");
+        let response = client
+            .get(uri!("/photo"))
+            .header(Header::new("nice-photo", "yes"))
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type().unwrap(), ContentType::JPEG);
+
+        let response = client
+            .get(uri!("/photo"))
+            .header(Header::new("nice-photo", "no"))
+            .dispatch();
+        assert_eq!(response.status(), Status::Forbidden);
+
+        let response = client.get(uri!("/photo")).dispatch();
+        assert_eq!(response.status(), Status::BadRequest);
     }
 }
