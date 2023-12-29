@@ -31,13 +31,13 @@ setInterval(() => {
 	}
 }, 500);
 
-function showUsername(username) {
+function showMessage(message) {
 	// console.log('show');
-	// console.log(username);
-	document.querySelector('#username').innerHTML = username;
+	// console.log(message);
+	document.querySelector('#message').innerHTML = message;
 }
-async function submitUsername(username) {
-	const response = await fetch('/username', {
+async function submitMessage(message) {
+	const response = await fetch('/message', {
 		method: 'POST', // *GET, POST, PUT, DELETE, etc.
 		mode: 'cors', // no-cors, *cors, same-origin
 		cache: 'no-cache', // *default, no-cache, reload, force-cache, only-if-cached
@@ -48,10 +48,10 @@ async function submitUsername(username) {
 		},
 		redirect: 'follow', // manual, *follow, error
 		referrerPolicy: 'no-referrer', // no-referrer, *no-referrer-when-downgrade, origin, origin-when-cross-origin, same-origin, strict-origin, strict-origin-when-cross-origin, unsafe-url
-		body: JSON.stringify({ username: username }) // body data type must match "Content-Type" header
+		body: JSON.stringify({ body: message }) // body data type must match "Content-Type" header
 	});
 	if (!response.ok) {
-		console.log('the submit username request failed');
+		console.log('the submit message request failed');
 		return false;
 	} else {
 		let resp = await response.text();
@@ -59,26 +59,26 @@ async function submitUsername(username) {
 	}
 }
 
-async function getUsername() {
-	fetch('/username')
+async function getMessage() {
+	fetch('/message')
 		.then(async (response) => {
 			if (!response.ok) {
-				console.log('the get username request failed');
+				console.log('the get message request failed');
 			}
 			const res = await response.text();
 			return res;
 		})
-		.then((username) => showUsername(username))
+		.then((message) => showMessage(message))
 		.catch((err) => console.error(`Fetch problem: ${err.message}`));
 }
 
-async function newUsername() {
-	const username = document.querySelector('#new-username').value;
-	if (username != '') {
-		let resp = await submitUsername(username);
+async function newMessage() {
+	const message = document.querySelector('#new-message').value;
+	if (message != '') {
+		let resp = await submitMessage(message);
 		if (resp) {
-			getUsername();
+			getMessage();
 		}
 	}
 }
-getUsername();
+getMessage();

@@ -18,8 +18,8 @@ use std::sync::Mutex;
 struct PhotoKey<'r>(&'r str);
 
 #[derive(Deserialize)]
-struct User {
-    username: Mutex<String>,
+struct Message {
+    body: Mutex<String>,
 }
 
 #[derive(Deserialize)]
@@ -70,15 +70,15 @@ fn divide(factors: Json<Factors>) -> String {
     }
 }
 
-#[post("/username", format = "json", data = "<user>")]
-fn set_username(user: Json<User>, user_state: &State<User>) {
-    let mut username_state_guard = user_state.username.lock().unwrap();
-    *username_state_guard = user.username.lock().unwrap().clone();
+#[post("/message", format = "json", data = "<message>")]
+fn set_message(message: Json<Message>, message_state: &State<Message>) {
+    let mut message_state_guard = message_state.body.lock().unwrap();
+    *message_state_guard = message.body.lock().unwrap().clone();
 }
 
-#[get("/username")]
-fn get_username(user_state: &State<User>) -> String {
-    user_state.username.lock().unwrap().to_string()
+#[get("/message")]
+fn get_message(message_state: &State<Message>) -> String {
+    message_state.body.lock().unwrap().to_string()
 }
 
 #[get("/photo")]
@@ -111,8 +111,8 @@ fn script(a: &str, b: &str) -> String {
 fn rocket() -> _ {
     dotenv().ok(); // loads environment variables from .env file
     rocket::build()
-        .manage(User {
-            username: Mutex::new("".to_string()),
+        .manage(Message {
+            body: Mutex::new("".to_string()),
         })
         // routes defined above: get
         .mount("/", routes![hello])
@@ -123,9 +123,9 @@ fn rocket() -> _ {
         .mount("/style", FileServer::from(relative!("static/css")))
         .mount("/js", FileServer::from(relative!("static/js")))
         // route to set state
-        .mount("/", routes![set_username])
+        .mount("/", routes![set_message])
         // route to get state
-        .mount("/", routes![get_username])
+        .mount("/", routes![get_message])
         // route that uses custom guard
         .mount("/", routes![get_photo])
         // route that execute an external script
@@ -170,26 +170,26 @@ mod test {
     }
 
     #[test]
-    fn username_test() {
-        fn set_and_read(user_name: &str) {
+    fn message_test() {
+        fn set_and_read(message_name: &str) {
             let client = Client::tracked(rocket()).expect("valid rocket instance");
 
-            let get_response = client.get(uri!("/username")).dispatch();
+            let get_response = client.get(uri!("/message")).dispatch();
             assert_eq!(get_response.status(), Status::Ok);
             assert_eq!(get_response.content_type().unwrap(), ContentType::Text);
             assert_eq!(get_response.into_string().unwrap(), "");
 
             let set_response = client
-                .post(uri!("/username"))
+                .post(uri!("/message"))
                 .header(ContentType::JSON)
-                .body(json::to_string(&json::json!({"username": user_name})).unwrap())
+                .body(json::to_string(&json::json!({"body": message_name})).unwrap())
                 .dispatch();
             assert_eq!(set_response.status(), Status::Ok);
 
-            let get_response = client.get(uri!("/username")).dispatch();
+            let get_response = client.get(uri!("/message")).dispatch();
             assert_eq!(get_response.status(), Status::Ok);
             assert_eq!(get_response.content_type().unwrap(), ContentType::Text);
-            assert_eq!(get_response.into_string().unwrap(), user_name);
+            assert_eq!(get_response.into_string().unwrap(), message_name);
         }
 
         set_and_read("Sirio");
