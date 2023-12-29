@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate rocket;
+extern crate dotenv;
 
 use rocket::fs::{relative, FileServer, NamedFile};
 use rocket::http::Status;
@@ -7,6 +8,8 @@ use rocket::request::{FromRequest, Outcome, Request};
 use rocket::serde::json::Json;
 use rocket::serde::Deserialize;
 use rocket::State;
+
+use dotenv::dotenv;
 
 use std::path::Path;
 use std::process::Command;
@@ -106,6 +109,7 @@ fn script(a: &str, b: &str) -> String {
 //this is run as main
 #[launch]
 fn rocket() -> _ {
+    dotenv().ok(); // loads environment variables from .env file
     rocket::build()
         .manage(User {
             username: Mutex::new("".to_string()),
