@@ -2,15 +2,24 @@
 extern crate rocket;
 extern crate dotenv;
 
+use bson::oid::ObjectId;
+use mongodb::Collection;
 use rocket::fs::{relative, FileServer, NamedFile};
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome, Request};
 use rocket::serde::json::Json;
-use rocket::serde::Deserialize;
+use rocket::serde::{Deserialize, Serialize};
 use rocket::State;
 
+use bson::doc;
 use dotenv::dotenv;
+use mongodb::{
+    options::{ClientOptions, ResolverConfig},
+    Client,
+};
 
+use std::env;
+use std::error::Error;
 use std::path::Path;
 use std::process::Command;
 use std::str;
@@ -20,6 +29,19 @@ struct PhotoKey<'r>(&'r str);
 #[derive(Deserialize)]
 struct Message {
     body: Mutex<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+struct User {
+    _id: ObjectId,
+    name: String,
+    contacts: Vec<String>,
+    password: String,
+}
+
+#[derive(Debug)]
+struct UsersCol {
+    col: Collection<User>,
 }
 
 #[derive(Deserialize)]
@@ -106,13 +128,33 @@ fn script(a: &str, b: &str) -> String {
     }
     return res;
 }
+
+#[get("/users")]
+async fn get_users(users_col: &State<UsersCol>) -> Json<Vec<User>> {
+    let users = users_query(users_col).await;
+    match users {
+        Ok(users_vector) => Json(users_vector),
+        Err(err) => Json(vec![User {
+            _id: ObjectId::new(),
+            name: err.to_string(),
+            contacts: vec!["Error".to_string()],
+            password: "Error".to_string(),
+        }]),
+    }
+}
+
 //this is run as main
 #[launch]
-fn rocket() -> _ {
+async fn rocket() -> _ {
     dotenv().ok(); // loads environment variables from .env file
+    let mongo_client = mdb_connection().await.expect("couldn't connect to MongoDB");
+
     rocket::build()
         .manage(Message {
             body: Mutex::new("".to_string()),
+        })
+        .manage(UsersCol {
+            col: mongo_client.database("decisionFlow").collection("users"),
         })
         // routes defined above: get
         .mount("/", routes![hello])
@@ -130,109 +172,171 @@ fn rocket() -> _ {
         .mount("/", routes![get_photo])
         // route that execute an external script
         .mount("/", routes![script])
+        // route that query the database for the users
+        .mount("/", routes![get_users])
+}
+
+async fn mdb_connection() -> Result<Client, Box<dyn Error>> {
+    // Load the MongoDB connection string from an environment variable:
+    let client_uri =
+        env::var("MONGODB_URI").expect("You must set the MONGODB_URI environment var!");
+
+    // A Client is needed to connect to MongoDB:
+    // An extra line of code to work around a DNS issue on Windows:
+    let options =
+        ClientOptions::parse_with_resolver_config(&client_uri, ResolverConfig::cloudflare())
+            .await?;
+
+    let client = Client::with_options(options)?;
+
+    Ok(client)
+}
+
+async fn users_query(users_col: &State<UsersCol>) -> Result<Vec<User>, Box<dyn Error>> {
+    let mut result: Vec<User> = vec![];
+    let mut users = users_col.col.find(doc! {}, None).await?;
+    while users.advance().await? {
+        result.push(users.deserialize_current().unwrap());
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
 mod test {
     use super::rocket;
     use rocket::http::{ContentType, Header, Status};
-    use rocket::local::blocking::Client;
+    use rocket::local::asynchronous::Client;
     use rocket::serde::json;
 
-    #[test]
-    fn hello_test() {
-        let client = Client::tracked(rocket()).expect("valid rocket instance");
-        let response = client.get(uri!(super::hello)).dispatch();
+    #[async_test]
+    async fn hello_test() {
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
+        let response = client.get(uri!(super::hello)).dispatch().await;
         assert_eq!(response.status(), Status::Ok);
-        assert_eq!(response.into_string().unwrap(), "Hello, world!");
+        assert_eq!(response.into_string().await.unwrap(), "Hello, world!");
     }
 
-    #[test]
-    fn index_test() {
-        let client = Client::tracked(rocket()).expect("valid rocket instance");
-        let response = client.get(uri!("/index")).dispatch();
+    #[async_test]
+    async fn index_test() {
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
+        let response = client.get(uri!("/index")).dispatch().await;
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::HTML);
         // could use some other tests here but I don't know what to test
     }
 
-    #[test]
-    fn divide_test() {
-        let client = Client::tracked(rocket()).expect("valid rocket instance");
+    #[async_test]
+    async fn divide_test() {
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
         let response = client
             .post(uri!("/divide"))
             .header(ContentType::JSON)
             .body(r#"{"dividend": 4, "divisor": 2}"#)
-            .dispatch();
+            .dispatch()
+            .await;
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::Text);
-        assert_eq!(response.into_string().unwrap(), "2");
+        assert_eq!(response.into_string().await.unwrap(), "2");
     }
 
-    #[test]
-    fn message_test() {
-        fn set_and_read(message_name: &str) {
-            let client = Client::tracked(rocket()).expect("valid rocket instance");
+    #[async_test]
+    async fn message_test() {
+        async fn set_and_read(message_name: &str) {
+            let client = Client::tracked(rocket().await)
+                .await
+                .expect("valid rocket instance");
 
-            let get_response = client.get(uri!("/message")).dispatch();
+            let get_response = client.get(uri!("/message")).dispatch().await;
             assert_eq!(get_response.status(), Status::Ok);
             assert_eq!(get_response.content_type().unwrap(), ContentType::Text);
-            assert_eq!(get_response.into_string().unwrap(), "");
+            assert_eq!(get_response.into_string().await.unwrap(), "");
 
             let set_response = client
                 .post(uri!("/message"))
                 .header(ContentType::JSON)
                 .body(json::to_string(&json::json!({"body": message_name})).unwrap())
-                .dispatch();
+                .dispatch()
+                .await;
             assert_eq!(set_response.status(), Status::Ok);
 
-            let get_response = client.get(uri!("/message")).dispatch();
+            let get_response = client.get(uri!("/message")).dispatch().await;
             assert_eq!(get_response.status(), Status::Ok);
             assert_eq!(get_response.content_type().unwrap(), ContentType::Text);
-            assert_eq!(get_response.into_string().unwrap(), message_name);
+            assert_eq!(get_response.into_string().await.unwrap(), message_name);
         }
 
-        set_and_read("Sirio");
-        set_and_read("Andromeda");
-        set_and_read("Altair");
-        set_and_read("Polluce");
+        set_and_read("Sirio").await;
+        set_and_read("Andromeda").await;
+        set_and_read("Altair").await;
+        set_and_read("Polluce").await;
     }
 
-    #[test]
-    fn req_guards_test() {
-        let client = Client::tracked(rocket()).expect("valid rocket instance");
+    #[async_test]
+    async fn req_guards_test() {
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
         let response = client
             .get(uri!("/photo"))
             .header(Header::new("nice-photo", "yes"))
-            .dispatch();
+            .dispatch()
+            .await;
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::JPEG);
 
         let response = client
             .get(uri!("/photo"))
             .header(Header::new("nice-photo", "no"))
-            .dispatch();
+            .dispatch()
+            .await;
         assert_eq!(response.status(), Status::Forbidden);
 
-        let response = client.get(uri!("/photo")).dispatch();
+        let response = client.get(uri!("/photo")).dispatch().await;
         assert_eq!(response.status(), Status::BadRequest);
     }
 
-    #[test]
-    fn script_test() {
-        let client = Client::tracked(rocket()).expect("valid rocket instance");
-        let response = client.get(uri!("/script?a=9182.467&b=3057")).dispatch();
+    #[async_test]
+    async fn script_test() {
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
+        let response = client
+            .get(uri!("/script?a=9182.467&b=3057"))
+            .dispatch()
+            .await;
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::Text);
-        assert_eq!(response.into_string().unwrap(), "12239.467");
+        assert_eq!(response.into_string().await.unwrap(), "12239.467");
 
-        let client = Client::tracked(rocket()).expect("valid rocket instance");
-        let response = client.get(uri!("/script?a=9182.467")).dispatch();
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
+        let response = client.get(uri!("/script?a=9182.467")).dispatch().await;
         assert_eq!(response.status(), Status::UnprocessableEntity);
 
-        let client = Client::tracked(rocket()).expect("valid rocket instance");
-        let response = client.get(uri!("/script?a=9182.467&b=vega")).dispatch();
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
+        let response = client
+            .get(uri!("/script?a=9182.467&b=vega"))
+            .dispatch()
+            .await;
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::Text);
+    }
+    #[async_test]
+    async fn mongodb_test() {
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
+        let response = client.get(uri!("/users")).dispatch().await;
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type().unwrap(), ContentType::JSON);
     }
 }

@@ -7,7 +7,11 @@ edition = "2021"
 
 [dependencies]
 dotenv = "0.15.0"
+mongodb = { version = "2.1"}
+bson = { version = "2", features = ["chrono-0_4"] }
+chrono = "0.4" # Used for setting DateTimes
 serde = { version = "1.0", features = ["derive"] }
+tokio = "1.35.1"
 
 [dependencies.rocket]
 version = "0.5.0-rc.1"
