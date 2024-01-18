@@ -3,6 +3,7 @@ extern crate rocket;
 extern crate dotenv;
 
 use bson::oid::ObjectId;
+use mongodb::results::{DeleteResult, InsertOneResult};
 use mongodb::Collection;
 use rocket::fs::{relative, FileServer, NamedFile};
 use rocket::http::Status;
@@ -29,6 +30,11 @@ struct PhotoKey<'r>(&'r str);
 #[derive(Deserialize)]
 struct Message {
     body: Mutex<String>,
+}
+
+#[derive(Deserialize)]
+struct DeleteFilter {
+    name: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -113,25 +119,22 @@ async fn get_photo(_photo_key: PhotoKey<'_>) -> Option<NamedFile> {
 #[get("/script?<a>&<b>")]
 fn script(a: &str, b: &str) -> String {
     // Command::new("python3").args([a, b]).output()
-    let res: String;
-    match Command::new("python3")
+    let res: String = match Command::new("python3")
         .args(["./static/py/sum.py", a, b])
         .output()
     {
-        Ok(out) => {
-            res = match str::from_utf8(&out.stdout) {
-                Ok(text) => text.trim().to_string(),
-                Err(e) => return format!("couldn't read the script output: {}", e).to_string(),
-            }
-        }
+        Ok(out) => match str::from_utf8(&out.stdout) {
+            Ok(text) => text.trim().to_string(),
+            Err(e) => return format!("couldn't read the script output: {}", e).to_string(),
+        },
         Err(e) => return format!("the script couldn't be executed: {}", e).to_string(),
-    }
-    return res;
+    };
+    res
 }
 
 #[get("/users")]
 async fn get_users(users_col: &State<UsersCol>) -> Json<Vec<User>> {
-    let users = users_query(users_col).await;
+    let users = get_user_query(users_col).await;
     match users {
         Ok(users_vector) => Json(users_vector),
         Err(err) => Json(vec![User {
@@ -140,6 +143,24 @@ async fn get_users(users_col: &State<UsersCol>) -> Json<Vec<User>> {
             contacts: vec!["Error".to_string()],
             password: "Error".to_string(),
         }]),
+    }
+}
+
+#[post("/user", format = "json", data = "<user>")]
+async fn add_user(user: Json<User>, users_col: &State<UsersCol>) -> String {
+    let result = add_user_query(users_col, user.into_inner()).await;
+    match result {
+        Ok(res) => res.inserted_id.to_string(),
+        Err(err) => format!("no document inserted: {}", err),
+    }
+}
+
+#[post("/delete_user", format = "json", data = "<user_name>")]
+async fn delete_user(user_name: Json<DeleteFilter>, users_col: &State<UsersCol>) -> String {
+    let result = delete_user_query(users_col, user_name.into_inner().name).await;
+    match result {
+        Ok(res) => format!("{} user deleted", res.deleted_count),
+        Err(err) => format!("no document deleted: {}", err),
     }
 }
 
@@ -174,6 +195,10 @@ async fn rocket() -> _ {
         .mount("/", routes![script])
         // route that query the database for the users
         .mount("/", routes![get_users])
+        // route that query the database to insert a new user
+        .mount("/", routes![add_user])
+        // route that query the database to delete a user
+        .mount("/", routes![delete_user])
 }
 
 async fn mdb_connection() -> Result<Client, Box<dyn Error>> {
@@ -192,7 +217,7 @@ async fn mdb_connection() -> Result<Client, Box<dyn Error>> {
     Ok(client)
 }
 
-async fn users_query(users_col: &State<UsersCol>) -> Result<Vec<User>, Box<dyn Error>> {
+async fn get_user_query(users_col: &State<UsersCol>) -> Result<Vec<User>, Box<dyn Error>> {
     let mut result: Vec<User> = vec![];
     let mut users = users_col.col.find(doc! {}, None).await?;
     while users.advance().await? {
@@ -201,9 +226,29 @@ async fn users_query(users_col: &State<UsersCol>) -> Result<Vec<User>, Box<dyn E
     Ok(result)
 }
 
+async fn add_user_query(
+    users_col: &State<UsersCol>,
+    new_user: User,
+) -> Result<InsertOneResult, Box<dyn Error>> {
+    let users = users_col.col.insert_one(new_user, None).await?;
+    Ok(users)
+}
+
+async fn delete_user_query(
+    users_col: &State<UsersCol>,
+    user_name: String,
+) -> Result<DeleteResult, Box<dyn Error>> {
+    let users = users_col
+        .col
+        .delete_one(doc! {"name": user_name}, None)
+        .await?;
+    Ok(users)
+}
+
 #[cfg(test)]
 mod test {
     use super::rocket;
+    use bson::oid::ObjectId;
     use rocket::http::{ContentType, Header, Status};
     use rocket::local::asynchronous::Client;
     use rocket::serde::json;
@@ -330,13 +375,44 @@ mod test {
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::Text);
     }
+
     #[async_test]
-    async fn mongodb_test() {
+    async fn mongodb_read_test() {
         let client = Client::tracked(rocket().await)
             .await
             .expect("valid rocket instance");
         let response = client.get(uri!("/users")).dispatch().await;
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.content_type().unwrap(), ContentType::JSON);
+    }
+
+    #[async_test]
+    async fn mongodb_write_and_delete_test() {
+        let client = Client::tracked(rocket().await)
+            .await
+            .expect("valid rocket instance");
+        let response = client
+            .post(uri!("/user"))
+            .header(ContentType::JSON)
+            .body(
+                json::to_string(
+                    &json::json!({"_id":ObjectId::new(),"name":"test_user","contacts":["test@gtest.com"],"password":""}),
+                )
+                .unwrap(),
+            )
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type().unwrap(), ContentType::Text);
+
+        let response = client
+            .post(uri!("/delete_user"))
+            .header(ContentType::JSON)
+            .body(json::to_string(&json::json!({"name":"test_user"})).unwrap())
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.content_type().unwrap(), ContentType::Text);
     }
 }
